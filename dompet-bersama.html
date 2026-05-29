@@ -398,7 +398,7 @@
 <script>
 // ==================== CONFIG ====================
 const CLIENT_ID = '1080409108776-0jd9hb71nempnef93j49qrn33tcr1d9g.apps.googleusercontent.com';
-const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
+const SCOPES = 'openid email profile https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
 const API_KEY = ''; // not needed for OAuth flow
 const DISCOVERY_DOCS = [
   'https://sheets.googleapis.com/$discovery/rest?version=v4',
@@ -445,13 +445,17 @@ function signIn() {
     callback: async (resp) => {
       if (resp.error) { showToast('Login gagal: ' + resp.error, true); return; }
       accessToken = resp.access_token;
-      await getUserInfo();
-      if (sheetId) {
-        showLoading('Memuat data dari Sheets...');
-        await loadFromSheet();
-        showApp();
-      } else {
-        showSetup();
+      try {
+        await getUserInfo();
+        if (sheetId) {
+          showLoading('Memuat data dari Sheets...');
+          await loadFromSheet();
+          showApp();
+        } else {
+          showSetup();
+        }
+      } catch (e) {
+        document.getElementById('loginScreen').style.display = 'flex';
       }
     }
   });
@@ -463,10 +467,20 @@ async function getUserInfo() {
     const r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: 'Bearer ' + accessToken }
     });
+
+    if (!r.ok) {
+      const errText = await r.text();
+      console.error('Gagal ambil userinfo:', r.status, errText);
+      throw new Error('Token Google tidak valid untuk userinfo');
+    }
+
     const d = await r.json();
     userEmail = d.email || '';
     userName = d.name || d.email || 'User';
-  } catch(e) {}
+  } catch(e) {
+    showToast('Login gagal: ' + e.message, true);
+    throw e;
+  }
 }
 
 // ==================== SHEETS API ====================
