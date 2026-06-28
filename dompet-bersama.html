@@ -115,12 +115,13 @@
     border-radius: 50%;
   }
   .budget-label { font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: var(--accent); margin-bottom: 6px; }
-  .budget-edit-row { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
-  .budget-total { font-family: 'Syne', sans-serif; font-size: 32px; font-weight: 800; line-height: 1; }
+  .budget-edit-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 16px; }
+  .budget-total { font-family: 'Syne', sans-serif; font-size: 28px; font-weight: 800; line-height: 1.1; flex: 1; word-break: break-word; }
   .budget-edit-btn {
-    background: rgba(200,245,101,0.12); border: 1px solid rgba(200,245,101,0.3);
-    color: var(--accent); border-radius: 6px; font-size: 11px; padding: 4px 8px;
-    cursor: pointer; font-family: 'DM Mono', monospace;
+    background: rgba(200,245,101,0.15); border: 1px solid rgba(200,245,101,0.4);
+    color: var(--accent); border-radius: 8px; font-size: 12px; padding: 6px 12px;
+    cursor: pointer; font-family: 'DM Mono', monospace; flex-shrink: 0;
+    white-space: nowrap; margin-top: 2px;
   }
   .budget-inline-form { display: none; align-items: center; gap: 8px; margin-bottom: 16px; }
   .budget-inline-form.open { display: flex; }
@@ -840,31 +841,46 @@ async function confirmReset() {
   transactions = [];
   render();
   try {
-    // Clear semua baris transaksi (baris 2 dst), tapi tetap keep header di baris 1
-    // Cara: hapus semua konten rows 2-5000
     const meta = await sheetsRequest('GET', `/${sheetId}?fields=sheets.properties`);
     const txSheet = meta.sheets.find(s => s.properties.title === 'Transaksi');
     const sheetGid = txSheet?.properties?.sheetId ?? 0;
 
-    // Get jumlah baris yang ada dulu
-    const existing = await sheetsRequest('GET', `/${sheetId}/values/Transaksi!A:A`);
-    const rowCount = existing.values ? existing.values.length : 1;
+    // Step 1: Clear semua konten dulu
+    await sheetsRequest('POST', `/${sheetId}:batchUpdate`, {
+      requests: [{
+        updateCells: {
+          range: {
+            sheetId: sheetGid,
+            startRowIndex: 1, // skip header
+            endRowIndex: 10000,
+            startColumnIndex: 0,
+            endColumnIndex: 7
+          },
+          fields: 'userEnteredValue'
+        }
+      }]
+    });
 
-    if (rowCount > 1) {
-      await sheetsRequest('POST', `/${sheetId}:batchUpdate`, {
-        requests: [{
-          deleteDimension: {
-            range: {
-              sheetId: sheetGid,
-              dimension: 'ROWS',
-              startIndex: 1, // row index 1 = baris ke-2 (setelah header)
-              endIndex: rowCount
-            }
-          }
-        }]
+    // Step 2: Simpan timestamp reset ke Config biar istri tau ada reset
+    const now = new Date().toISOString();
+    await sheetsRequest('POST', `/${sheetId}/values/Config!A3:B3:append?valueInputOption=RAW&insertDataOption=OVERWRITE`, {
+      values: [['last_reset', now]]
+    });
+    // Update Config langsung
+    const cfg = await sheetsRequest('GET', `/${sheetId}/values/Config!A1:B10`);
+    const rows = cfg.values || [];
+    const resetIdx = rows.findIndex(r => r[0] === 'last_reset');
+    if (resetIdx >= 0) {
+      await sheetsRequest('PUT', `/${sheetId}/values/Config!A${resetIdx+1}:B${resetIdx+1}?valueInputOption=RAW`, {
+        values: [['last_reset', now]]
+      });
+    } else {
+      await sheetsRequest('POST', `/${sheetId}/values/Config!A1:B1:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+        values: [['last_reset', now]]
       });
     }
-    showToast('Reset berhasil! Semua transaksi dihapus ✅');
+
+    showToast('Reset berhasil! Minta istri tekan ⟳ untuk sync ✅');
   } catch(e) { showToast('Gagal reset: ' + e.message, true); }
 }
 
@@ -909,11 +925,19 @@ async function saveBudgetEdit() {
 }
 
 // ==================== INIT ====================
-// Auto login if token cached (best effort)
 window.onload = () => {
-  // Show login by default
   document.getElementById('loginScreen').style.display = 'flex';
 };
+
+// Auto sync setiap 30 detik kalau app aktif
+setInterval(async () => {
+  if (document.getElementById('mainApp').style.display !== 'none' && sheetId && accessToken && !isSyncing) {
+    isSyncing = true;
+    await loadFromSheet();
+    isSyncing = false;
+    render();
+  }
+}, 30000);
 </script>
 </body>
 </html>
