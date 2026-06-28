@@ -398,7 +398,7 @@
 <script>
 // ==================== CONFIG ====================
 const CLIENT_ID = '1080409108776-0jd9hb71nempnef93j49qrn33tcr1d9g.apps.googleusercontent.com';
-const SCOPES = 'openid email profile https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
 const API_KEY = ''; // not needed for OAuth flow
 const DISCOVERY_DOCS = [
   'https://sheets.googleapis.com/$discovery/rest?version=v4',
@@ -445,42 +445,28 @@ function signIn() {
     callback: async (resp) => {
       if (resp.error) { showToast('Login gagal: ' + resp.error, true); return; }
       accessToken = resp.access_token;
-      try {
-        await getUserInfo();
-        if (sheetId) {
-          showLoading('Memuat data dari Sheets...');
-          await loadFromSheet();
-          showApp();
-        } else {
-          showSetup();
-        }
-      } catch (e) {
-        document.getElementById('loginScreen').style.display = 'flex';
+      await getUserInfo();
+      if (sheetId) {
+        showLoading('Memuat data dari Sheets...');
+        await loadFromSheet();
+        showApp();
+      } else {
+        showSetup();
       }
     }
   });
-  client.requestAccessToken({ prompt: 'consent' });
+  client.requestAccessToken();
 }
 
 async function getUserInfo() {
   try {
-    const r = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+    const r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: 'Bearer ' + accessToken }
     });
-
-    if (!r.ok) {
-      const errText = await r.text();
-      console.error('Gagal ambil userinfo:', r.status, errText);
-      userEmail = 'login@google'; userName = 'User'; return;
-    }
-
     const d = await r.json();
     userEmail = d.email || '';
     userName = d.name || d.email || 'User';
-  } catch(e) {
-    showToast('Login gagal: ' + e.message, true);
-    throw e;
-  }
+  } catch(e) {}
 }
 
 // ==================== SHEETS API ====================
@@ -854,9 +840,32 @@ async function confirmReset() {
   transactions = [];
   render();
   try {
-    await sheetsRequest('PUT', `/${sheetId}/values/Transaksi!A2:G5000?valueInputOption=RAW`, { values: [[]] });
-    showToast('Data di-reset ✅');
-  } catch(e) { showToast('Gagal reset', true); }
+    // Clear semua baris transaksi (baris 2 dst), tapi tetap keep header di baris 1
+    // Cara: hapus semua konten rows 2-5000
+    const meta = await sheetsRequest('GET', `/${sheetId}?fields=sheets.properties`);
+    const txSheet = meta.sheets.find(s => s.properties.title === 'Transaksi');
+    const sheetGid = txSheet?.properties?.sheetId ?? 0;
+
+    // Get jumlah baris yang ada dulu
+    const existing = await sheetsRequest('GET', `/${sheetId}/values/Transaksi!A:A`);
+    const rowCount = existing.values ? existing.values.length : 1;
+
+    if (rowCount > 1) {
+      await sheetsRequest('POST', `/${sheetId}:batchUpdate`, {
+        requests: [{
+          deleteDimension: {
+            range: {
+              sheetId: sheetGid,
+              dimension: 'ROWS',
+              startIndex: 1, // row index 1 = baris ke-2 (setelah header)
+              endIndex: rowCount
+            }
+          }
+        }]
+      });
+    }
+    showToast('Reset berhasil! Semua transaksi dihapus ✅');
+  } catch(e) { showToast('Gagal reset: ' + e.message, true); }
 }
 
 function toggleEditKat(id) {
@@ -877,21 +886,26 @@ async function saveEditKat(id) {
 
 function openBudgetEdit() {
   document.getElementById('budgetDisplayRow').style.display='none';
-  document.getElementById('budgetInlineForm').classList.add('open');
+  const form = document.getElementById('budgetInlineForm');
+  form.style.display='flex';
+  form.classList.add('open');
   document.getElementById('budgetEditInput').value=BUDGET;
   document.getElementById('budgetEditInput').focus();
 }
 function closeBudgetEdit() {
   document.getElementById('budgetDisplayRow').style.display='flex';
-  document.getElementById('budgetInlineForm').classList.remove('open');
+  const form = document.getElementById('budgetInlineForm');
+  form.style.display='none';
+  form.classList.remove('open');
 }
 async function saveBudgetEdit() {
   const val=parseInt(document.getElementById('budgetEditInput').value);
   if (!val||val<=0) return;
   BUDGET=val;
   localStorage.setItem('dompet_budget',String(BUDGET));
-  closeBudgetEdit(); render();
-  try { await saveConfigToSheet(); showToast('Budget diupdate ✅'); } catch(e) {}
+  closeBudgetEdit();
+  render();
+  try { await saveConfigToSheet(); showToast('Budget diupdate ✅'); } catch(e) { showToast('Gagal simpan budget', true); }
 }
 
 // ==================== INIT ====================
